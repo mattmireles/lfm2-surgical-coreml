@@ -9,6 +9,12 @@ is split at natural operator boundaries and each segment is sent to the device
 that actually admits it. Stage 0 proves admission and numerical correctness.
 It does **not** yet claim an end-to-end latency or energy win.
 
+This is the third case study for *Surgical Inference*. The first two public
+artifact lines are [Kokoro Core ML](https://github.com/mattmireles/kokoro-coreml)
+and [Magenta RealTime 2 for iPhone](https://github.com/mattmireles/magenta-realtime-2-iphone),
+with the MRT2 packages mirrored on
+[Hugging Face](https://huggingface.co/mattmireles/magenta-realtime-2-iphone).
+
 ## Stage 0 result
 
 The frozen checkpoint is
