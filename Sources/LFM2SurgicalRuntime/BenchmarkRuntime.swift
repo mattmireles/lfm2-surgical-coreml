@@ -175,25 +175,25 @@ public struct G1AResult: Codable, Sendable {
 /// Shared macOS/iOS Core ML orchestrator for the frozen 13-segment pipeline.
 public final class SurgicalPrefillRuntime {
     /// Frozen checkpoint hidden width.
-    private static let hiddenSize = 1_024
+    static let hiddenSize = 1_024
 
     /// Frozen attention head width.
-    private static let headDimension = 64
+    static let headDimension = 64
 
     /// Two live causal-convolution values for kernel width three.
-    private static let convolutionStateWidth = 2
+    static let convolutionStateWidth = 2
 
     /// Frozen checkpoint rotary base.
-    private static let ropeTheta = 1_000_000.0
+    static let ropeTheta = 1_000_000.0
 
     /// Largest finite negative fp16 attention-mask value.
-    private static let causalMaskNegative = -65_504.0
+    static let causalMaskNegative = -65_504.0
 
     /// Pre-registered maximum fraction of segmented prefill spent on boundaries.
     private static let g1aMaximumOverheadFraction = 0.30
 
     /// Maximal same-class runs in exact checkpoint execution order.
-    private static let segments = [
+    static let segments = [
         SegmentDescriptor(
             name: "segment_00_conv_0_1",
             stateInputs: ["conv_state_0_in", "conv_state_1_in"],
@@ -386,7 +386,7 @@ public final class SurgicalPrefillRuntime {
 
     /// Runs the common embedding, one layer-stack prediction, and common head.
     private func runMonolithic() throws -> (logits: MLMultiArray, hiddenBoundaryDataType: String) {
-        let hidden = try predict(
+        let hidden = try Self.predict(
             model: embedding,
             values: ["token_ids": tokenIDs, "token_mask": tokenMask],
             output: "hidden_out"
@@ -397,7 +397,7 @@ public final class SurgicalPrefillRuntime {
                 values[stateInput] = zeroState
             }
         }
-        let output = try predict(
+        let output = try Self.predict(
             model: monolithicLayerStack,
             values: values,
             output: "hidden_out"
@@ -409,7 +409,7 @@ public final class SurgicalPrefillRuntime {
 
     /// Runs the common embedding, thirteen direct handoffs, and common head.
     private func runSegmented() throws -> (logits: MLMultiArray, hiddenBoundaryDataType: String) {
-        var hidden = try predict(
+        var hidden = try Self.predict(
             model: embedding,
             values: ["token_ids": tokenIDs, "token_mask": tokenMask],
             output: "hidden_out"
@@ -424,7 +424,9 @@ public final class SurgicalPrefillRuntime {
                     values[stateInput] = zeroState
                 }
             }
-            hidden = try predict(model: model, values: values, output: "hidden_out")
+            hidden = try Self.predict(
+                model: model, values: values, output: "hidden_out"
+            )
             try Self.requireFloat16Boundary(
                 hidden, label: "\(descriptor.name) hidden output"
             )
@@ -461,38 +463,56 @@ public final class SurgicalPrefillRuntime {
 
     /// Copies the final token once and runs the common tied language-model head.
     private func runHead(hidden: MLMultiArray) throws -> MLMultiArray {
+        try Self.runHead(
+            model: languageModelHead,
+            hidden: hidden,
+            lastPosition: input.bucket - 1
+        )
+    }
+
+    /// Applies the one-position head using the shared fp16 final-token contract.
+    static func runHead(
+        model: MLModel, hidden: MLMultiArray, lastPosition: Int
+    ) throws -> MLMultiArray {
         let lastHidden = try MLMultiArray(
             shape: [1, Self.hiddenSize, 1, 1].map(NSNumber.init),
             dataType: .float16
         )
-        let lastPosition = input.bucket - 1
         for channel in 0..<Self.hiddenSize {
             lastHidden[[0, channel, 0, 0].map(NSNumber.init)] =
                 hidden[[0, channel, 0, lastPosition].map(NSNumber.init)]
         }
-        return try predict(
-            model: languageModelHead,
+        return try Self.predict(
+            model: model,
             values: ["hidden_states": lastHidden],
             output: "logits"
         )
     }
 
     /// Runs one Core ML model and fails closed when its documented output is absent.
-    private func predict(
+    static func predict(
         model: MLModel,
         values: [String: MLMultiArray],
         output outputName: String
     ) throws -> MLMultiArray {
-        let provider = try MLDictionaryFeatureProvider(dictionary: values)
-        let prediction = try model.prediction(from: provider)
+        let prediction = try predictAll(model: model, values: values)
         guard let output = prediction.featureValue(for: outputName)?.multiArrayValue else {
             throw RuntimeError.missingOutput(outputName)
         }
         return output
     }
 
+    /// Runs one Core ML model and retains every named output for parity gates.
+    static func predictAll(
+        model: MLModel,
+        values: [String: MLMultiArray]
+    ) throws -> MLFeatureProvider {
+        let provider = try MLDictionaryFeatureProvider(dictionary: values)
+        return try model.prediction(from: provider)
+    }
+
     /// Compiles package metadata once, outside every timed region.
-    private static func loadModel(
+    static func loadModel(
         package: URL, configuration: MLModelConfiguration
     ) throws -> MLModel {
         let compiled = try MLModel.compileModel(at: package)
@@ -500,7 +520,7 @@ public final class SurgicalPrefillRuntime {
     }
 
     /// Creates the exact int32 embedding input from the frozen JSON fixture.
-    private static func makeTokenIDs(_ values: [Int32]) throws -> MLMultiArray {
+    static func makeTokenIDs(_ values: [Int32]) throws -> MLMultiArray {
         let array = try MLMultiArray(
             shape: [1, NSNumber(value: values.count)], dataType: .int32
         )
@@ -511,7 +531,7 @@ public final class SurgicalPrefillRuntime {
     }
 
     /// Creates a small reusable constant input outside timed prediction.
-    private static func makeFilledArray(
+    static func makeFilledArray(
         shape: [NSNumber], dataType: MLMultiArrayDataType, value: Double
     ) throws -> MLMultiArray {
         let array = try MLMultiArray(shape: shape, dataType: dataType)
@@ -522,7 +542,7 @@ public final class SurgicalPrefillRuntime {
     }
 
     /// Reproduces the Python full-sequence RoPE tables in fp32.
-    private static func makeRoPETables(
+    static func makeRoPETables(
         sequenceLength: Int
     ) throws -> (MLMultiArray, MLMultiArray) {
         let shape = [1, sequenceLength, headDimension].map(NSNumber.init)
@@ -544,7 +564,7 @@ public final class SurgicalPrefillRuntime {
     }
 
     /// Creates the finite fp16 additive mask `[1,1,S,S]`.
-    private static func makeCausalMask(sequenceLength: Int) throws -> MLMultiArray {
+    static func makeCausalMask(sequenceLength: Int) throws -> MLMultiArray {
         let mask = try MLMultiArray(
             shape: [1, 1, sequenceLength, sequenceLength].map(NSNumber.init),
             dataType: .float16
@@ -560,7 +580,7 @@ public final class SurgicalPrefillRuntime {
     }
 
     /// Compares paired final logits outside the measured wall-time interval.
-    private static func maximumAbsoluteDifference(
+    static func maximumAbsoluteDifference(
         _ left: MLMultiArray, _ right: MLMultiArray
     ) throws -> Double {
         guard left.count == right.count else {
@@ -574,7 +594,7 @@ public final class SurgicalPrefillRuntime {
     }
 
     /// Rejects any hidden boundary that Core ML does not materialize as fp16.
-    private static func requireFloat16Boundary(
+    static func requireFloat16Boundary(
         _ array: MLMultiArray, label: String
     ) throws {
         guard array.dataType == .float16 else {
@@ -585,7 +605,7 @@ public final class SurgicalPrefillRuntime {
     }
 
     /// Matches the Python evidence hash over sorted relative paths and bytes.
-    private static func packageTreeSHA256(_ package: URL) throws -> String {
+    static func packageTreeSHA256(_ package: URL) throws -> String {
         guard let enumerator = FileManager.default.enumerator(
             at: package,
             includingPropertiesForKeys: [.isRegularFileKey],
@@ -616,7 +636,7 @@ public final class SurgicalPrefillRuntime {
     }
 
     /// Returns the median and inclusive linear-interpolated IQR.
-    private static func summary(_ values: [Double]) -> (median: Double, iqr: Double) {
+    static func summary(_ values: [Double]) -> (median: Double, iqr: Double) {
         let sorted = values.sorted()
         let median = percentile(sorted, fraction: 0.5)
         let q1 = percentile(sorted, fraction: 0.25)
@@ -625,7 +645,7 @@ public final class SurgicalPrefillRuntime {
     }
 
     /// Matches Python's inclusive quantile interpolation for durable parity.
-    private static func percentile(_ sorted: [Double], fraction: Double) -> Double {
+    static func percentile(_ sorted: [Double], fraction: Double) -> Double {
         let position = fraction * Double(sorted.count - 1)
         let lower = Int(floor(position))
         let upper = Int(ceil(position))
@@ -637,7 +657,7 @@ public final class SurgicalPrefillRuntime {
     }
 
     /// Produces a stable evidence string for the actual boundary storage type.
-    private static func dataTypeName(_ dataType: MLMultiArrayDataType) -> String {
+    static func dataTypeName(_ dataType: MLMultiArrayDataType) -> String {
         switch dataType {
         case .double: return "double"
         case .float32: return "float32"

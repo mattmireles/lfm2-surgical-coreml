@@ -11,6 +11,8 @@ import torch
 from coremltools.converters.mil.mil.scope import ScopeSource
 
 from scripts.dump_device_compute_plan import (
+    COMPUTE_UNITS,
+    host_provenance,
     model_runner_working_directory,
     signing_build_arguments,
     validated_device_provenance,
@@ -32,6 +34,11 @@ from scripts.lfm2_surgical.constants import (
     validate_frozen_protocol,
 )
 from scripts.lfm2_surgical.export_blocks import gqa_mixed_precision_selector
+from scripts.lfm2_surgical.materialize_fixed_pairs import (
+    FIXED_BUCKET,
+    PAIR_MATERIALIZATIONS,
+    fixed_shape_map,
+)
 from scripts.lfm2_surgical.segments import (
     CoreMLConvBlockWithState,
     ReferenceConvBlockWithState,
@@ -203,6 +210,18 @@ def test_mobile_provenance_fails_closed_and_persists_exact_identity() -> None:
         validated_device_provenance(device, details)
 
 
+def test_compute_plan_supports_scheduler_control_with_host_identity() -> None:
+    """The `.all` control must retain enough provenance to bind a Mac row."""
+
+    assert "ALL" in COMPUTE_UNITS
+    provenance = host_provenance()
+    assert provenance["where"] == "host"
+    assert provenance["host"]
+    assert provenance["operating_system"]
+    assert provenance["macos_product_version"]
+    assert provenance["macos_build"]
+
+
 def test_explicit_profile_disables_automatic_portal_mutations() -> None:
     """Headless signing must not combine a fixed profile with portal updates."""
 
@@ -248,6 +267,21 @@ def test_stage1_partition_is_thirteen_maximal_class_runs() -> None:
     assert tuple(
         layer_index for spec in specs for layer_index in spec.layer_indices
     ) == tuple(range(16))
+
+
+def test_selective_pair_materialization_is_exactly_the_frozen_three() -> None:
+    """The evidence amendment must not become a partition or bucket search."""
+
+    assert FIXED_BUCKET == 512
+    assert tuple(spec.name for spec in PAIR_MATERIALIZATIONS) == (
+        "segment_00_conv_0_1",
+        "segment_02_conv_3_4",
+        "segment_04_conv_6_7",
+    )
+    for spec in PAIR_MATERIALIZATIONS:
+        shapes = fixed_shape_map(spec)
+        assert shapes["hidden_states"] == (1, 1_024, 1, 512)
+        assert set(shapes) == {"hidden_states", *spec.state_inputs}
 
 
 def test_explicit_conv_state_matches_reference_equation() -> None:

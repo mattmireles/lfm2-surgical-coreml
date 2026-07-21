@@ -32,18 +32,23 @@ import argparse
 import asyncio
 import hashlib
 import json
+import platform
+import socket
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from dataclasses import replace
 from pathlib import Path
 
 import coremltools as ct
 from coremltools.models.compute_plan import MLComputePlan
 
-# Maps the CLI flag to the coremltools enum. CPU_AND_NE is the ANE-viability
-# probe per the triage guide; ALL is deliberately absent (masks rejections).
+# Maps explicit evidence labels to the coremltools enum. ``ALL`` is required for
+# plan 011's same-package scheduler control; callers must still inspect the
+# emitted per-op placement instead of treating permission as proof of ANE use.
 COMPUTE_UNITS = {
+    "ALL": ct.ComputeUnit.ALL,
     "CPU_ONLY": ct.ComputeUnit.CPU_ONLY,
     "CPU_AND_GPU": ct.ComputeUnit.CPU_AND_GPU,
     "CPU_AND_NE": ct.ComputeUnit.CPU_AND_NE,
@@ -52,6 +57,23 @@ MODEL_RUNNER_CACHE = Path("outputs/coreml_model_runner")
 CLANG_PROBE_WRAPPER = Path(__file__).with_name("xcode_clang_probe_wrapper.zsh")
 DEFAULT_DEVELOPMENT_TEAM = "6ETYBAJKY8"
 DEFAULT_BUNDLE_IDENTIFIER = "com.mattmireles.CoreMLModelRunner"
+
+
+def host_provenance() -> dict:
+    """Return the exact Mac and OS identity that produced a host compute plan."""
+
+    return {
+        "where": "host",
+        "host": socket.gethostname(),
+        "operating_system": platform.platform(),
+        "macos_product_version": platform.mac_ver()[0],
+        "macos_build": subprocess.run(
+            ["sw_vers", "-buildVersion"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip(),
+    }
 
 
 def compile_package(package: Path, workdir: Path) -> Path:
@@ -319,7 +341,9 @@ async def load_plan(
     """Load a host plan or a plan compiled on the selected mobile device."""
 
     if device_name is None:
-        return MLComputePlan.load_from_path(str(compiled), compute_units=units), {"where": "host"}
+        return MLComputePlan.load_from_path(
+            str(compiled), compute_units=units
+        ), host_provenance()
     from coremltools.models.ml_program.experimental.compute_plan_utils import (
         load_compute_plan_from_path_on_device,
     )
@@ -441,6 +465,7 @@ def main() -> None:
         "package_sha256": package_tree_sha256(args.package),
         "compute_units": args.compute_units,
         "coremltools": ct.__version__,
+        "captured_at_utc": datetime.now(timezone.utc).isoformat(),
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(summary, indent=2, sort_keys=True))

@@ -17,11 +17,19 @@ let package = Package(
             name: "lfm2-surgical-benchmark",
             targets: ["LFM2SurgicalBenchmark"]
         ),
+        .executable(
+            name: "lfm2-selective-benchmark",
+            targets: ["LFM2SelectiveBenchmark"]
+        ),
     ],
     targets: [
         .target(name: "LFM2SurgicalRuntime"),
         .executableTarget(
             name: "LFM2SurgicalBenchmark",
+            dependencies: ["LFM2SurgicalRuntime"]
+        ),
+        .executableTarget(
+            name: "LFM2SelectiveBenchmark",
             dependencies: ["LFM2SurgicalRuntime"]
         ),
     ]
