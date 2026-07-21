@@ -175,7 +175,10 @@ def refresh_mobile_device_connection(device, device_state_type):
     return replace(device, state=device_state_type.CONNECTED), provenance
 
 
-def signing_build_arguments(provisioning_profile_uuid: str | None) -> list[str]:
+def signing_build_arguments(
+    provisioning_profile_uuid: str | None,
+    code_sign_identity: str | None = None,
+) -> list[str]:
     """Return mutually exclusive Xcode provisioning arguments.
 
     An explicit profile is the least-privilege headless path after a profile
@@ -185,10 +188,15 @@ def signing_build_arguments(provisioning_profile_uuid: str | None) -> list[str]:
     """
 
     if provisioning_profile_uuid:
-        return [
+        arguments = [
             "CODE_SIGN_STYLE=MANUAL",
             f"PROVISIONING_PROFILE={provisioning_profile_uuid}",
         ]
+        if code_sign_identity:
+            arguments.append(f"CODE_SIGN_IDENTITY={code_sign_identity}")
+        return arguments
+    if code_sign_identity:
+        raise ValueError("an explicit code-sign identity requires an explicit profile")
     return [
         "CODE_SIGN_STYLE=AUTOMATIC",
         "-allowProvisioningUpdates",
@@ -200,6 +208,7 @@ def model_runner_working_directory(
     development_team: str,
     bundle_identifier: str,
     provisioning_profile_uuid: str | None,
+    code_sign_identity: str | None = None,
 ) -> Path:
     """Return a cache isolated by every signing input that changes the app."""
 
@@ -208,6 +217,7 @@ def model_runner_working_directory(
             development_team,
             bundle_identifier,
             provisioning_profile_uuid or "automatic",
+            code_sign_identity or "automatic-identity",
         )
     )
     digest = hashlib.sha256(signing_identity.encode("utf-8")).hexdigest()[:16]
@@ -219,6 +229,7 @@ def ensure_model_runner_app(
     development_team: str,
     bundle_identifier: str,
     provisioning_profile_uuid: str | None,
+    code_sign_identity: str | None,
 ) -> Path:
     """Build the exact signed runner and return its isolated working directory."""
 
@@ -226,6 +237,7 @@ def ensure_model_runner_app(
         development_team,
         bundle_identifier,
         provisioning_profile_uuid,
+        code_sign_identity,
     )
     build_path = (working_directory / device.udid).resolve()
     if next(build_path.rglob("*.app"), None) is not None:
@@ -251,7 +263,7 @@ def ensure_model_runner_app(
             "-configuration",
             "Release",
             f"SYMROOT={build_path}",
-            *signing_build_arguments(provisioning_profile_uuid),
+            *signing_build_arguments(provisioning_profile_uuid, code_sign_identity),
             f"DEVELOPMENT_TEAM={development_team}",
             f"PRODUCT_BUNDLE_IDENTIFIER={bundle_identifier}",
             f"CC={CLANG_PROBE_WRAPPER.resolve()}",
@@ -337,6 +349,7 @@ async def load_plan(
     development_team: str,
     bundle_identifier: str,
     provisioning_profile_uuid: str | None,
+    code_sign_identity: str | None,
 ) -> tuple[MLComputePlan, dict]:
     """Load a host plan or a plan compiled on the selected mobile device."""
 
@@ -387,6 +400,7 @@ async def load_plan(
         development_team,
         bundle_identifier,
         provisioning_profile_uuid,
+        code_sign_identity,
     )
     device = await device.prepare_for_model_debugging(
         credentials=credentials,
@@ -404,6 +418,7 @@ async def load_plan(
         if provisioning_profile_uuid
         else "automatic",
         "signing_provisioning_profile_uuid": provisioning_profile_uuid,
+        "signing_code_identity_sha1": code_sign_identity,
         **device_provenance,
     }
 
@@ -441,6 +456,11 @@ def main() -> None:
             "updates and device registration"
         ),
     )
+    parser.add_argument(
+        "--code-sign-identity",
+        default=None,
+        help="SHA-1 fingerprint selected from the explicit profile and local keychain",
+    )
     args = parser.parse_args()
 
     units = COMPUTE_UNITS[args.compute_units]
@@ -455,6 +475,7 @@ def main() -> None:
                 args.development_team,
                 args.bundle_identifier,
                 args.provisioning_profile_uuid,
+                args.code_sign_identity,
             )
         )
         summary = summarize(plan)

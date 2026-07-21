@@ -70,6 +70,18 @@ could produce a misleading speed result.
 Read the complete
 [selective-prefill negative-result report](docs/selective-split-report.md).
 
+## A17 Pro parity follow-up
+
+One final untimed phone probe asked whether the selective pair's ANE numerical
+failure was confined to the M2 Ultra. It was not. On an iPhone 15 Pro Max with
+iOS 27.0 beta (`24A5380h`), the fixed C6-7 twin placed 56/56 costed operations
+on the A17 Pro Neural Engine, exceeded the unchanged `1e-2` correctness gate
+in all six comparisons, and changed the final token `941 -> 509`. C0-1 and
+C3-4 were cancelled by the preregistered stop rule. No phone performance
+sample was collected.
+
+Read the complete [A17 Pro parity report](docs/a17-parity-report.md).
+
 ## Reproduce the exports
 
 Stage 0 requires Apple silicon, macOS, Python 3.11, and Xcode. The measured

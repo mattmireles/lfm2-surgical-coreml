@@ -513,15 +513,19 @@ def test_explicit_profile_disables_automatic_portal_mutations() -> None:
     """Headless signing must not combine a fixed profile with portal updates."""
 
     profile_uuid = "11111111-2222-3333-4444-555555555555"
-    assert signing_build_arguments(profile_uuid) == [
+    identity = "A" * 40
+    assert signing_build_arguments(profile_uuid, identity) == [
         "CODE_SIGN_STYLE=MANUAL",
-        f"PROVISIONING_PROFILE={profile_uuid}"
+        f"PROVISIONING_PROFILE={profile_uuid}",
+        f"CODE_SIGN_IDENTITY={identity}",
     ]
     assert signing_build_arguments(None) == [
         "CODE_SIGN_STYLE=AUTOMATIC",
         "-allowProvisioningUpdates",
         "-allowProvisioningDeviceRegistration",
     ]
+    with pytest.raises(ValueError, match="explicit profile"):
+        signing_build_arguments(None, identity)
 
 
 def test_runner_cache_isolated_by_complete_signing_identity() -> None:

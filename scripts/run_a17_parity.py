@@ -710,6 +710,7 @@ def run_dispatch(args: argparse.Namespace) -> int:
     if args.out_dir.resolve() != expected_directory.resolve():
         raise ValueError("dispatch output must use the frozen A17 evidence directory")
     profile_uuid = _profile_uuid_from_arguments(args)
+    signing_identity = profile_signing_identity(profile_uuid)
     package = FIXED_PAIR_ROOT / f"{pair.name}.mlpackage"
     if package_tree_sha256(package) != pair.fixed_sha256:
         raise ValueError("fixed-pair package hash mismatch before dispatch")
@@ -752,6 +753,8 @@ def run_dispatch(args: argparse.Namespace) -> int:
                     DEFAULT_BUNDLE_ID,
                     "--provisioning-profile-uuid",
                     profile_uuid,
+                    "--code-sign-identity",
+                    signing_identity,
                     "--out",
                     str(raw_path),
                 ],
