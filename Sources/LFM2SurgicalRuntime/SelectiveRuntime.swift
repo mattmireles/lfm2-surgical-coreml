@@ -287,7 +287,7 @@ public final class SelectivePrefillRuntime {
     private static let bootstrapSeed: UInt64 = 0x4C46_4D32_5048_3041
 
     /// Exactly the three pre-registered two-convolution islands.
-    private static let pairDefinitions = [
+    static let pairDefinitions = [
         PairDefinition(
             name: "segment_00_conv_0_1",
             segmentIndex: 0,
@@ -1006,7 +1006,7 @@ public final class SelectivePrefillRuntime {
         return results
     }
 
-    /// Returns every documented pair output without copying its storage.
+    /// Returns independent snapshots of every documented pair output.
     private func pairOutputs(
         model: MLModel,
         definition: PairDefinition,
@@ -1029,7 +1029,7 @@ public final class SelectivePrefillRuntime {
                         output, label: "\(definition.name) hidden output"
                     )
                 }
-                return (name, output)
+                return (name, try SurgicalPrefillRuntime.copyMultiArray(output))
             }
         )
     }
@@ -1455,6 +1455,7 @@ public final class SelectivePrefillRuntime {
     private static func commandOutput(
         executable: String, arguments: [String]
     ) throws -> String {
+        #if os(macOS)
         let process = Process()
         let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -1470,6 +1471,11 @@ public final class SelectivePrefillRuntime {
             )
         }
         return String(decoding: data, as: UTF8.self)
+        #else
+        throw RuntimeError.invalidInput(
+            "Mac host-noise probes are unavailable on this platform"
+        )
+        #endif
     }
 
     /// Extracts the kernel build identifier from ProcessInfo's stable string.
@@ -1493,7 +1499,7 @@ public final class SelectivePrefillRuntime {
 }
 
 /// Frozen metadata for one registered two-convolution island.
-private struct PairDefinition {
+struct PairDefinition {
     /// Package basename and durable evidence label.
     let name: String
 

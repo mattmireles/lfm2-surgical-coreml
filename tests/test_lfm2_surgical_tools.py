@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ import pytest
 import torch
 from coremltools.converters.mil.mil.scope import ScopeSource
 
+import scripts.run_a17_parity as a17
 from scripts.dump_device_compute_plan import (
     COMPUTE_UNITS,
     host_provenance,
@@ -44,6 +46,291 @@ from scripts.lfm2_surgical.segments import (
     ReferenceConvBlockWithState,
     build_segment_specs,
 )
+from scripts.run_a17_parity import (
+    COMPARISON_ORDERS,
+    DEFAULT_BUNDLE_ID,
+    DEFAULT_DEVICE_ID,
+    DEFAULT_DEVICE_UDID,
+    DEFAULT_PRODUCT_TYPE,
+    DISPATCH_SCHEMA,
+    EXPECTED_TOKEN,
+    MAXIMUM_ABSOLUTE_TOLERANCE,
+    PAIR_SPECS,
+    REGISTERED_BUCKET,
+    REGISTERED_PROMPT,
+    authorized_next_pair,
+    make_envelope,
+    package_tree_sha256,
+    validate_dispatch_payload,
+    validate_envelope,
+    validate_pair_result_payload,
+)
+
+
+def _a17_dispatch_payload(policy: str) -> dict:
+    """Return one minimal valid same-phone C6-7 dispatch fixture."""
+
+    pair = PAIR_SPECS[0]
+    histogram = {"gpu": 58} if policy == "CPU_AND_GPU" else {"neuralEngine": 58}
+    per_op_type = (
+        {"ios18.conv": {"gpu": 12}}
+        if policy == "CPU_AND_GPU"
+        else {"ios18.conv": {"neuralEngine": 12}}
+    )
+    return {
+        "compute_plan": {
+            "per_op_type": per_op_type,
+            "preferred_device_histogram": histogram,
+            "provenance": {
+                "compute_units": policy,
+                "device_identifier": DEFAULT_DEVICE_ID,
+                "device_os_build": "24A5380h",
+                "device_product_type": DEFAULT_PRODUCT_TYPE,
+                "device_udid": DEFAULT_DEVICE_UDID,
+                "package_sha256": pair.fixed_sha256,
+                "where": "device",
+            },
+            "total_costed_ops": 58,
+        },
+        "device": {
+            "coredevice_identifier": DEFAULT_DEVICE_ID,
+            "hardware_udid": DEFAULT_DEVICE_UDID,
+            "os_build": "24A5380h",
+            "product_type": DEFAULT_PRODUCT_TYPE,
+        },
+        "package_sha256": pair.fixed_sha256,
+        "pair": pair.name,
+        "policy": policy,
+    }
+
+
+def _a17_result_payload(error: float = MAXIMUM_ABSOLUTE_TOLERANCE) -> dict:
+    """Return one complete synthetic result at a selected numerical boundary."""
+
+    pair = PAIR_SPECS[0]
+    passed = error <= MAXIMUM_ABSOLUTE_TOLERANCE
+    rows = []
+    for index, order in enumerate(COMPARISON_ORDERS):
+        rows.append(
+            {
+                "ane_token": EXPECTED_TOKEN,
+                "candidate_order": order,
+                "gpu_ane_max_abs_by_output": dict.fromkeys(pair.outputs, error),
+                "gpu_token": EXPECTED_TOKEN,
+                "oracle_token": EXPECTED_TOKEN,
+                "pair_output_max_abs": error,
+                "passed": passed,
+                "repetition": index,
+                "repetition_kind": "first_use" if index == 0 else "warmed",
+                "source_twin_max_abs": error,
+                "source_twin_max_abs_by_output": dict.fromkeys(pair.outputs, error),
+                "suffix_logit_max_abs": error,
+            }
+        )
+    return {
+        "app": {"bundle_identifier": DEFAULT_BUNDLE_ID},
+        "artifacts": [
+            {
+                "name": f"{pair.name}_fixed512",
+                "path": "fixed",
+                "resource_name": f"{pair.name}_fixed512",
+                "sha256": pair.fixed_sha256,
+            }
+        ],
+        "bucket": REGISTERED_BUCKET,
+        "captured_at_utc": "2026-07-21T00:00:00+00:00",
+        "checkpoint": {
+            "repository": "LiquidAI/LFM2.5-350M",
+            "revision": "b9d6e4e2d75f440b12a2b4d731c808004ecbbd89",
+        },
+        "comparisons": rows,
+        "device": {
+            "coredevice_identifier": DEFAULT_DEVICE_ID,
+            "hardware_udid": DEFAULT_DEVICE_UDID,
+            "os_build": "24A5380h",
+            "product_type": DEFAULT_PRODUCT_TYPE,
+        },
+        "dispatch": [
+            {
+                "compute_units": policy,
+                "evidence_sha256": policy.lower(),
+                "package_sha256": pair.fixed_sha256,
+                "path": policy.lower(),
+            }
+            for policy in ("CPU_AND_GPU", "CPU_AND_NE")
+        ],
+        "maximum_absolute_tolerance": MAXIMUM_ABSOLUTE_TOLERANCE,
+        "oracle": {"passed": True, "top_token": EXPECTED_TOKEN},
+        "pair": pair.name,
+        "performance_samples_recorded": 0,
+        "precision": "fp16",
+        "prompt": REGISTERED_PROMPT,
+        "schema_version": 1,
+        "verdict": "PAIR PASS" if passed else "KILL",
+    }
+
+
+def test_a17_registered_pair_order_is_falsification_first() -> None:
+    """The M2 token-changing C6-7 pair must run before either cheaper failure."""
+
+    assert tuple(pair.name for pair in PAIR_SPECS) == (
+        "segment_04_conv_6_7",
+        "segment_00_conv_0_1",
+        "segment_02_conv_3_4",
+    )
+
+
+def test_a17_envelope_rejects_hash_mismatch() -> None:
+    """A later edit must not silently change hash-bound JSON evidence."""
+
+    document = make_envelope(DISPATCH_SCHEMA, _a17_dispatch_payload("CPU_AND_GPU"))
+    assert validate_envelope(document, DISPATCH_SCHEMA)["policy"] == "CPU_AND_GPU"
+    document["payload"]["policy"] = "CPU_AND_NE"
+    with pytest.raises(ValueError, match="SHA-256 mismatch"):
+        validate_envelope(document, DISPATCH_SCHEMA)
+
+
+def test_a17_dispatch_gate_requires_distinct_gpu_and_ane_placement() -> None:
+    """Policy labels alone must not admit a pair to the physical probe."""
+
+    pair = PAIR_SPECS[0]
+    assert validate_dispatch_payload(
+        _a17_dispatch_payload("CPU_AND_GPU"), pair, "CPU_AND_GPU"
+    )["passed"]
+    assert validate_dispatch_payload(
+        _a17_dispatch_payload("CPU_AND_NE"), pair, "CPU_AND_NE"
+    )["passed"]
+
+    wrong = _a17_dispatch_payload("CPU_AND_NE")
+    wrong["compute_plan"]["per_op_type"]["ios18.conv"] = {"gpu": 1, "neuralEngine": 11}
+    with pytest.raises(ValueError, match="not wholly ANE-preferred"):
+        validate_dispatch_payload(wrong, pair, "CPU_AND_NE")
+
+
+def test_a17_result_accepts_threshold_equality_and_six_rows() -> None:
+    """The preregistered `<= 1e-2` boundary passes without an epsilon rewrite."""
+
+    assert (
+        validate_pair_result_payload(_a17_result_payload(), PAIR_SPECS[0])
+        == "PAIR PASS"
+    )
+
+
+def test_a17_result_rejects_nonfinite_or_incomplete_outputs() -> None:
+    """NaN, infinity, or a missing named state must fail closed."""
+
+    nonfinite = _a17_result_payload()
+    nonfinite["comparisons"][0]["gpu_ane_max_abs_by_output"]["hidden_out"] = math.nan
+    with pytest.raises(ValueError, match="NaN, infinity"):
+        validate_pair_result_payload(nonfinite, PAIR_SPECS[0])
+
+    incomplete = _a17_result_payload()
+    del incomplete["comparisons"][0]["source_twin_max_abs_by_output"]["conv_state_6_out"]
+    with pytest.raises(ValueError, match="names drifted"):
+        validate_pair_result_payload(incomplete, PAIR_SPECS[0])
+
+
+def test_a17_result_rejects_row_token_and_dispatch_drift() -> None:
+    """Row count, token identity, and dispatch identity are mandatory evidence."""
+
+    short = _a17_result_payload()
+    short["comparisons"].pop()
+    with pytest.raises(ValueError, match="exactly six"):
+        validate_pair_result_payload(short, PAIR_SPECS[0])
+
+    token = _a17_result_payload()
+    token["comparisons"][0]["ane_token"] = 509
+    with pytest.raises(ValueError, match="pass flag drifted"):
+        validate_pair_result_payload(token, PAIR_SPECS[0])
+
+    dispatch = _a17_result_payload()
+    dispatch["dispatch"][0]["package_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="dispatch reference package"):
+        validate_pair_result_payload(dispatch, PAIR_SPECS[0])
+
+
+def test_a17_result_above_threshold_is_terminal_kill() -> None:
+    """No majority vote or warmed-row averaging may rescue one failed row."""
+
+    payload = _a17_result_payload(MAXIMUM_ABSOLUTE_TOLERANCE + 1.0e-6)
+    assert validate_pair_result_payload(payload, PAIR_SPECS[0]) == "KILL"
+    assert authorized_next_pair([payload]) is None
+
+
+def test_a17_state_machine_authorizes_only_the_next_passing_pair() -> None:
+    """Later pairs cannot run before every registered predecessor passes."""
+
+    assert authorized_next_pair([]) == PAIR_SPECS[0].name
+    first = _a17_result_payload()
+    assert authorized_next_pair([first]) == PAIR_SPECS[1].name
+
+
+def test_a17_dispatch_command_checks_the_prior_result_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dispatch capture itself may not bypass the registered stop-first order."""
+
+    def reject_prior_gate(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("prior result gate checked")
+
+    monkeypatch.setattr(a17, "_prior_pair_payloads", reject_prior_gate)
+    arguments = SimpleNamespace(
+        pair=PAIR_SPECS[1].name,
+        provisioning_profile_uuid="profile",
+        device_id=DEFAULT_DEVICE_ID,
+        out_dir=Path("dispatch"),
+    )
+    with pytest.raises(RuntimeError, match="prior result gate checked"):
+        a17.run_dispatch(arguments)
+
+
+def test_a17_result_binds_build_revision_os_and_completion_time() -> None:
+    """A stale phone payload must not be accepted as the current signed run."""
+
+    payload = _a17_result_payload()
+    payload["app"]["revision"] = "revision-a"
+    assert (
+        validate_pair_result_payload(
+            payload,
+            PAIR_SPECS[0],
+            expected_app_revision="revision-a",
+            expected_os_build="24A5380h",
+            not_before_utc="2026-07-20T23:59:00+00:00",
+        )
+        == "PAIR PASS"
+    )
+    with pytest.raises(ValueError, match="revision drifted"):
+        validate_pair_result_payload(
+            payload, PAIR_SPECS[0], expected_app_revision="revision-b"
+        )
+    with pytest.raises(ValueError, match="OS build drifted"):
+        validate_pair_result_payload(payload, PAIR_SPECS[0], expected_os_build="wrong")
+    with pytest.raises(ValueError, match="predates"):
+        validate_pair_result_payload(
+            payload,
+            PAIR_SPECS[0],
+            not_before_utc="2026-07-21T00:01:00+00:00",
+        )
+
+
+def test_a17_package_tree_hash_binds_relative_names_and_bytes(tmp_path: Path) -> None:
+    """Renaming or changing a staged package file must change its identity."""
+
+    package = tmp_path / "probe.mlpackage"
+    package.mkdir()
+    (package / "Manifest.json").write_text("{}")
+    first = package_tree_sha256(package)
+    (package / "Manifest.json").write_text('{"changed":true}')
+    assert package_tree_sha256(package) != first
+
+
+def test_a17_result_schema_contains_no_performance_fields() -> None:
+    """Correctness evidence must not acquire even one latency or duration field."""
+
+    payload = _a17_result_payload()
+    payload["latency_ms"] = 1.0
+    with pytest.raises(ValueError, match="prohibited performance field"):
+        validate_pair_result_payload(payload, PAIR_SPECS[0])
 
 
 def test_frozen_bucket_and_prompt_protocol() -> None:

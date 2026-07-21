@@ -583,14 +583,28 @@ public final class SurgicalPrefillRuntime {
     static func maximumAbsoluteDifference(
         _ left: MLMultiArray, _ right: MLMultiArray
     ) throws -> Double {
-        guard left.count == right.count else {
-            throw RuntimeError.invalidInput("logit output counts differ")
+        guard left.shape.map(\.intValue) == right.shape.map(\.intValue) else {
+            throw RuntimeError.invalidInput("array output shapes differ")
         }
         var maximum = 0.0
         for index in 0..<left.count {
-            maximum = max(maximum, abs(left[index].doubleValue - right[index].doubleValue))
+            let leftValue = left[index].doubleValue
+            let rightValue = right[index].doubleValue
+            guard leftValue.isFinite, rightValue.isFinite else {
+                throw RuntimeError.invalidInput("array output contains NaN or infinity")
+            }
+            maximum = max(maximum, abs(leftValue - rightValue))
         }
         return maximum
+    }
+
+    /// Copies tensor storage so a later Core ML prediction cannot mutate evidence.
+    static func copyMultiArray(_ source: MLMultiArray) throws -> MLMultiArray {
+        let copy = try MLMultiArray(shape: source.shape, dataType: source.dataType)
+        for index in 0..<source.count {
+            copy[index] = source[index]
+        }
+        return copy
     }
 
     /// Rejects any hidden boundary that Core ML does not materialize as fp16.

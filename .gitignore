@@ -18,3 +18,9 @@ outputs/
 AuthKey_*.p8
 *.p12
 *.mobileprovision
+
+# Generated physical-iPhone parity app products and copied model resources.
+ios-a17-parity/Generated/
+ios-a17-parity/*.xcodeproj/
+ios-a17-parity/DerivedData/
+ios-a17-parity/*.app/

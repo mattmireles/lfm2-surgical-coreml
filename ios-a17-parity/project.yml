@@ -1,0 +1,32 @@
+name: LFM2A17Parity
+options:
+  bundleIdPrefix: com.mattmireles
+  deploymentTarget:
+    iOS: "18.0"
+packages:
+  LFM2SurgicalCoreML:
+    path: ..
+targets:
+  LFM2A17Parity:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Generated/Resources
+        type: group
+        buildPhase: resources
+    dependencies:
+      - package: LFM2SurgicalCoreML
+        product: LFM2SurgicalRuntime
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mattmireles.LFM2A17Parity
+        DEVELOPMENT_TEAM: 6ETYBAJKY8
+        CODE_SIGN_STYLE: Manual
+        PROVISIONING_PROFILE_SPECIFIER: LFM2 A17 Parity Development
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        SWIFT_VERSION: "6.0"
+        COREML_CODEGEN_LANGUAGE: None
+        IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+        TARGETED_DEVICE_FAMILY: "1"
