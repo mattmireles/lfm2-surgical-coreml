@@ -1,4 +1,4 @@
-"""Protocol and schema tests for plan 010 Stage 0 tooling."""
+"""Protocol and schema tests for plan 010 Stage 0 and Stage 1 tooling."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import torch
 from coremltools.converters.mil.mil.scope import ScopeSource
 
 from scripts.dump_device_compute_plan import (
@@ -14,7 +15,12 @@ from scripts.dump_device_compute_plan import (
     signing_build_arguments,
     validated_device_provenance,
 )
-from scripts.lfm2_surgical.checkpoint import checkpoint_identity, effective_intermediate_size
+from scripts.lfm2_surgical.checkpoint import (
+    Lfm2Config,
+    checkpoint_identity,
+    effective_intermediate_size,
+)
+from scripts.lfm2_surgical.benchmark_decomposition_tax import median_iqr
 from scripts.lfm2_surgical.constants import (
     CONV_LAYER_INDEX,
     EXPECTED_LAYER_TYPES,
@@ -26,6 +32,11 @@ from scripts.lfm2_surgical.constants import (
     validate_frozen_protocol,
 )
 from scripts.lfm2_surgical.export_blocks import gqa_mixed_precision_selector
+from scripts.lfm2_surgical.segments import (
+    CoreMLConvBlockWithState,
+    ReferenceConvBlockWithState,
+    build_segment_specs,
+)
 
 
 def test_frozen_bucket_and_prompt_protocol() -> None:
@@ -223,3 +234,71 @@ def test_runner_cache_isolated_by_complete_signing_identity() -> None:
     assert first != model_runner_working_directory(
         "TEAMONE", "example.other", "PROFILE-A"
     )
+
+
+def test_stage1_partition_is_thirteen_maximal_class_runs() -> None:
+    """The frozen 16-layer order must become exactly thirteen segment predictions."""
+
+    specs = build_segment_specs(EXPECTED_LAYER_TYPES)
+    assert len(specs) == 13
+    assert specs[0].name == "segment_00_conv_0_1"
+    assert specs[1].name == "segment_01_gqa_2"
+    assert specs[4].name == "segment_04_conv_6_7"
+    assert specs[-1].name == "segment_12_conv_15"
+    assert tuple(
+        layer_index for spec in specs for layer_index in spec.layer_indices
+    ) == tuple(range(16))
+
+
+def test_explicit_conv_state_matches_reference_equation() -> None:
+    """The ANE-layout state handoff must preserve the fp32 causal equation."""
+
+    torch.manual_seed(7)
+    config = Lfm2Config(
+        hidden_size=4,
+        intermediate_size=8,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        head_dim=2,
+        norm_eps=1.0e-5,
+        conv_l_cache=3,
+        conv_bias=False,
+        rope_theta=10_000.0,
+        vocab_size=16,
+        layer_types=("conv",),
+    )
+    tensors = {
+        "operator_norm.weight": torch.rand(4),
+        "ffn_norm.weight": torch.rand(4),
+        "feed_forward.w1.weight": torch.rand(8, 4) - 0.5,
+        "feed_forward.w2.weight": torch.rand(4, 8) - 0.5,
+        "feed_forward.w3.weight": torch.rand(8, 4) - 0.5,
+        "conv.in_proj.weight": torch.rand(12, 4) - 0.5,
+        "conv.conv.weight": torch.rand(4, 1, 3) - 0.5,
+        "conv.out_proj.weight": torch.rand(4, 4) - 0.5,
+    }
+    reference = ReferenceConvBlockWithState(config, tensors).eval()
+    candidate = CoreMLConvBlockWithState(config, tensors).eval()
+    hidden = torch.rand(1, 6, 4) - 0.5
+    state = torch.rand(1, 4, 2) - 0.5
+    with torch.inference_mode():
+        expected_hidden, expected_state = reference(hidden, state)
+        actual_hidden, actual_state = candidate(
+            hidden.to(torch.float16).transpose(1, 2).unsqueeze(2),
+            state.to(torch.float16),
+        )
+    actual_hidden = actual_hidden[:, :, 0, :].transpose(1, 2).float()
+    assert torch.max(torch.abs(expected_hidden - actual_hidden)).item() < 5.0e-3
+    assert torch.max(torch.abs(expected_state - actual_state.float())).item() < 5.0e-3
+
+
+def test_decomposition_tax_summary_uses_inclusive_iqr() -> None:
+    """Durable G1a summaries must retain the registered median and IQR signals."""
+
+    summary = median_iqr([10.0, 20.0, 30.0, 40.0])
+    assert summary == {
+        "median_ms": 25.0,
+        "q1_ms": 17.5,
+        "q3_ms": 32.5,
+        "iqr_ms": 15.0,
+    }

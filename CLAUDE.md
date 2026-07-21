@@ -5,7 +5,9 @@
 This repository measures whether LFM2.5-350M benefits from per-block-class
 Core ML placement. Stage 0 proved that the short-convolution block admits to
 ANE and the GQA block admits to GPU on both a Mac Studio and physical M2 iPad.
-Do not turn that admission result into an unmeasured performance claim.
+Stage 1 then failed gate G1a: 13 segment predictions consumed 37.43% of
+segmented 512-token prefill. Do not run the cancelled device matrix or turn
+the Stage 0 admission result into a placement-win claim.
 
 ## Working rules
 
@@ -33,6 +35,7 @@ Start with:
 
 - [Experiment specification](docs/experiment-spec-v1.1.md)
 - [Stage 0 report](docs/stage0-report.md)
+- [Stage 1 negative-result report](docs/stage1-report.md)
 - [Public README](README.md)
 
 Use the canonical external manuals rather than copying them:

@@ -4,10 +4,11 @@
 GQA-block operations prefer its GPU.** Same LFM2.5-350M checkpoint. Same five
 prompt buckets. Different block classes, deliberately placed.
 
-This repository tests one claim: a hybrid model may run better when its graph
+This repository tested one claim: a hybrid model may run better when its graph
 is split at natural operator boundaries and each segment is sent to the device
-that actually admits it. Stage 0 proves admission and numerical correctness.
-It does **not** yet claim an end-to-end latency or energy win.
+that actually admits it. Stage 0 proved admission. Stage 1 killed the pipeline:
+13 segment predictions consumed **37.43%** of segmented 512-token prefill.
+No phone latency or energy claim is made.
 
 This is the third case study for *Surgical Inference*. The first two public
 artifact lines are [Kokoro Core ML](https://github.com/mattmireles/kokoro-coreml)
@@ -38,6 +39,24 @@ matches the independent fp32 implementation exactly through layers 0–2.
 
 Read the complete [Stage 0 report](docs/stage0-report.md) and the frozen
 [experiment specification](docs/experiment-spec-v1.1.md).
+
+## Stage 1 kill result
+
+The registered G1a gate compared the same layer stack under one placement:
+GPU permitted everywhere, one real 512-token prompt, warmed execution, and
+load/compile time excluded.
+
+| Control | Median | IQR | GPU dispatch |
+| --- | ---: | ---: | ---: |
+| Monolithic full prefill | 36.032 ms | 0.352 ms | 797/797 ops |
+| 13-segment full prefill | 57.591 ms | 4.367 ms | 807/807 ops |
+
+The release Swift harness hands fp16 `MLMultiArray` outputs directly between
+models, and paired logits match exactly. The `21.558 ms` delta is therefore
+boundary cost, not Python overhead, model drift, or different placement. It is
+`37.43%` of segmented prefill, beyond the frozen `30%` stop line.
+
+Read the complete [Stage 1 negative-result report](docs/stage1-report.md).
 
 ## Reproduce the exports
 
@@ -114,8 +133,8 @@ C C A C C A C C A C A C A C A C
 
 The conv and attention blocks expose different scheduling behavior. A single
 monolithic `computeUnits` policy cannot express “conv to ANE, attention to
-GPU.” Stage 1 will export the 13 contiguous operator-class runs and measure
-the cost of those boundaries before making any performance claim.
+GPU.” Stage 1 exported the 13 contiguous operator-class runs and measured
+exactly that cost. The gate failed, so the device matrix was cancelled.
 
 ## Technical references
 
@@ -136,4 +155,5 @@ the MIT license. They remain governed by the
 [LFM Open License v1.0](https://huggingface.co/LiquidAI/LFM2.5-350M/blob/main/LICENSE).
 No model weights are committed here.
 
-Stage 0 answers admission. Stage 1 asks whether the boundaries are worth it.
+Stage 0 answered admission. Stage 1 answered the harder question: these
+boundaries are not worth it at 350M scale with separate Core ML predictions.

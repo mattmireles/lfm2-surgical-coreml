@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 .pytest_cache/
+.build/
 .venv/
 .venv-*/
 __pycache__/
