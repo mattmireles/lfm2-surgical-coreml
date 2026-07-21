@@ -58,6 +58,18 @@ boundary cost, not Python overhead, model drift, or different placement. It is
 
 Read the complete [Stage 1 negative-result report](docs/stage1-report.md).
 
+## Selective follow-up kill result
+
+A separately preregistered follow-up tested whether three coarser
+two-convolution ANE islands could avoid the 13-segment boundary tax. The
+zero-boundary `.all` monolith was slower and numerically different, and all
+three fixed-512 convolution pairs failed the `1e-2` GPU-versus-ANE numerical
+gate. Pair timing, tail export, and device runs were cancelled before they
+could produce a misleading speed result.
+
+Read the complete
+[selective-prefill negative-result report](docs/selective-split-report.md).
+
 ## Reproduce the exports
 
 Stage 0 requires Apple silicon, macOS, Python 3.11, and Xcode. The measured
