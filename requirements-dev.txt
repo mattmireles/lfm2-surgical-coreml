@@ -1,0 +1,2 @@
+-r scripts/lfm2_surgical/requirements-stage0.txt
+pytest==9.0.3

@@ -1,0 +1,19 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.venv/
+.venv-*/
+__pycache__/
+*.py[cod]
+
+# Downloaded weights, converted packages, compiled models, and measurements.
+outputs/
+*.mlpackage/
+*.mlmodelc/
+
+# Apple signing secrets must never enter the repository.
+AuthKey_*.p8
+*.p12
+*.mobileprovision
