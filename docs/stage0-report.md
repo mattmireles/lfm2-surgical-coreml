@@ -402,9 +402,11 @@ numerical evidence plus the physical iPad admission table and final GO verdict.
 ## Verification
 
 ```bash
-# Independent source oracle: Transformers 5.5.0 from the isolated target.
-PYTHONPATH="$PWD/outputs/lfm2_surgical/transformers5" \
-  .venv/bin/python scripts/lfm2_surgical/check_hf_reference.py
+# Independent source oracle: Transformers 5.5.0 in an isolated environment.
+python3.11 -m venv .venv-hf
+.venv-hf/bin/pip install \
+  -r scripts/lfm2_surgical/requirements-hf-reference.txt
+.venv-hf/bin/python scripts/lfm2_surgical/check_hf_reference.py
 
 # Real checkpoint extraction, canonical exports, and 32-prompt parity.
 .venv/bin/python scripts/lfm2_surgical/extract_blocks.py
